@@ -59,7 +59,7 @@ final sale mucho mejor que el vivo, y el hardware nunca se ahoga.
 
 ## Requisitos
 
-- Ubuntu Server con Python 3.10+
+- Ubuntu Server con Python **3.10–3.13** (ver nota abajo)
 - CPU con **AVX2** (cualquier Intel desde Haswell / AMD desde Zen)
 - ~2 GB de RAM libres, ~4 GB de disco para los modelos
 - Tailscale instalado y en el tailnet
@@ -92,6 +92,36 @@ Seguí la primera descarga de modelos (tarda unos minutos):
 
 ```bash
 journalctl -u listener -f
+```
+
+### Versión de Python
+
+`ctranslate2` —el motor bajo faster-whisper— se distribuye como **wheel
+compilado**. Si no hay wheel para la versión de Python del sistema, pip intenta
+compilar CTranslate2 desde fuente y eso no termina bien.
+
+**Ubuntu 26.04 trae Python 3.14 por defecto**, que hoy suele quedar fuera de los
+wheels publicados. `install.sh` lo detecta: prefiere `python3.12`/`3.11`/`3.13`
+si están, e intenta instalar una del archivo de Ubuntu si no.
+
+Si no hay ninguna disponible, la salida más limpia es `uv`, que baja un CPython
+propio sin tocar el del sistema:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
+less /tmp/uv-install.sh                 # revisalo antes de ejecutarlo
+sh /tmp/uv-install.sh
+~/.local/bin/uv python install 3.12
+cd /opt/listener
+sudo PYTHON_BIN="$(~/.local/bin/uv python find 3.12)" ./deploy/install.sh
+```
+
+`PYTHON_BIN` fuerza el intérprete y `install.sh` recrea el venv si la versión
+cambió. Para comprobar qué quedó instalado:
+
+```bash
+.venv/bin/python -V
+.venv/bin/python -c "import faster_whisper, webrtcvad, ctranslate2; print('OK')"
 ```
 
 ### Actualizar
