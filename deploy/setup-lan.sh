@@ -12,14 +12,43 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=deploy/dns-providers.sh
+source "$APP_DIR/deploy/dns-providers.sh"
+
 DOMAIN="${1:-}"
+PROVIDER="${2:-}"
+EMAIL="${ACME_EMAIL:-admin@${DOMAIN#*.}}"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "corré esto con sudo"
-[[ -n "$DOMAIN" ]] || die "uso: sudo ./deploy/setup-lan.sh listener.institucion.cr"
+
+if [[ -z "$DOMAIN" ]]; then
+  cat >&2 <<'MSG'
+uso: sudo ./deploy/setup-lan.sh <dominio> [proveedor-dns]
+
+  sudo ./deploy/setup-lan.sh listener.institucion.cr cloudflare
+
+Si no sabés el proveedor, averigualo primero (no cambia nada del sistema):
+
+  ./deploy/detect-dns.sh institucion.cr
+
+Sin proveedor, el script deja el bloque tls para completar a mano.
+MSG
+  exit 1
+fi
+
+if [[ -n "$PROVIDER" ]] && ! provider_known "$PROVIDER"; then
+  echo "proveedor no reconocido: $PROVIDER" >&2
+  echo "Soportados:" >&2
+  list_providers >&2
+  echo >&2
+  echo "Si el tuyo tiene plugin en https://github.com/caddy-dns pero no está en" >&2
+  echo "la lista, agregalo a deploy/dns-providers.sh o editá el Caddyfile a mano." >&2
+  exit 1
+fi
 
 # --- 0. La contrasena es obligatoria en la LAN -------------------------------
 # Sin esto, publicar en la LAN significa que cualquiera con un cable en el
@@ -79,12 +108,41 @@ if [[ -f /etc/caddy/Caddyfile ]] && ! grep -q 'LISTENER' /etc/caddy/Caddyfile; t
 fi
 
 if [[ ! -f /etc/caddy/Caddyfile ]] || ! grep -q "$DOMAIN" /etc/caddy/Caddyfile; then
+  if [[ -n "$PROVIDER" ]]; then
+    DNS_DIRECTIVE="$(provider_field "$PROVIDER" 2)"
+    ENVVARS="$(provider_field "$PROVIDER" 3)"
+  else
+    DNS_DIRECTIVE="# COMPLETAR: dns <proveedor> {env.TOKEN}  -- ver dns-providers.sh"
+    ENVVARS=""
+    warn "sin proveedor: hay que completar el bloque tls a mano"
+  fi
+
   log "escribiendo /etc/caddy/Caddyfile para $DOMAIN"
-  sed "s|listener\.institucion\.cr|$DOMAIN|g" \
-    "$APP_DIR/deploy/Caddyfile.example" > /etc/caddy/Caddyfile
-  warn "editá /etc/caddy/Caddyfile: el correo y el proveedor de DNS del bloque tls"
+  sed -e "s|@DOMAIN@|$DOMAIN|g" \
+      -e "s|@EMAIL@|$EMAIL|g" \
+      -e "s|@DNS_DIRECTIVE@|$DNS_DIRECTIVE|g" \
+      "$APP_DIR/deploy/Caddyfile.example" > /etc/caddy/Caddyfile
 else
   log "el Caddyfile ya menciona $DOMAIN, no se sobrescribe"
+  ENVVARS="$([[ -n "$PROVIDER" ]] && provider_field "$PROVIDER" 3 || echo "")"
+fi
+
+# --- 3b. Plugin del proveedor ------------------------------------------------
+if [[ -n "$PROVIDER" ]]; then
+  PACKAGE="$(provider_field "$PROVIDER" 1)"
+  # `caddy list-modules` muestra los plugins compilados en el binario actual.
+  if caddy list-modules 2>/dev/null | grep -q "dns.providers.$PROVIDER"; then
+    log "el plugin de $PROVIDER ya está en el binario de Caddy"
+  else
+    log "instalando el plugin $PACKAGE (descarga un binario nuevo de Caddy)"
+    if caddy add-package "$PACKAGE"; then
+      log "plugin instalado"
+    else
+      warn "no se pudo instalar el plugin automáticamente. A mano:"
+      warn "    sudo caddy add-package $PACKAGE"
+      warn "    sudo systemctl restart caddy"
+    fi
+  fi
 fi
 
 touch /etc/caddy/caddy.env
@@ -118,34 +176,38 @@ if ! systemctl is-active --quiet caddy; then
 fi
 log "Caddy activo"
 
-cat <<EOF
-
---------------------------------------------------------------------------
-Falta lo que depende de tu proveedor de DNS:
-
-  1. Registro A:   $DOMAIN  ->  $LAN_IP
-     Un registro público apuntando a una IP privada es correcto y habitual:
-     solo resuelve, no expone nada.
-
-  2. Token del proveedor para el desafío DNS-01:
-         sudo nano /etc/caddy/caddy.env
-         # CF_API_TOKEN=...        (permiso Zone:DNS:Edit sobre la zona)
-
-  3. Plugin del proveedor (el Caddy de serie no lo trae):
-         sudo caddy add-package github.com/caddy-dns/cloudflare
-         sudo systemctl restart caddy
-
-  4. Seguí la emisión del certificado:
-         sudo journalctl -u caddy -f
-     Buscá "certificate obtained successfully". Tarda 1-2 minutos.
-
-Cuando termine, desde cualquier equipo del switch:
-
-     https://$DOMAIN
-
-  La contraseña de AUTH_PASSWORD es lo único que se necesita: nadie tiene que
-  instalar Tailscale.
-
-  Tailscale sigue funcionando en paralelo para acceso desde fuera.
---------------------------------------------------------------------------
-EOF
+echo
+echo "--------------------------------------------------------------------------"
+echo "Falta lo que depende de tu proveedor de DNS:"
+echo
+echo "  1. Registro A:   $DOMAIN  ->  $LAN_IP"
+echo "     Un registro público apuntando a una IP privada es correcto y habitual:"
+echo "     solo resuelve, no expone nada."
+echo
+if [[ -n "${ENVVARS:-}" ]]; then
+  echo "  2. Token de $PROVIDER en /etc/caddy/caddy.env (ya está en chmod 600):"
+  echo "         sudo nano /etc/caddy/caddy.env"
+  for v in $ENVVARS; do
+    echo "         $v=..."
+  done
+  echo "     El token necesita permiso para EDITAR los registros de la zona."
+  echo "     Después:  sudo systemctl restart caddy"
+else
+  echo "  2. Completá el bloque tls de /etc/caddy/Caddyfile con tu proveedor."
+  echo "     Para saber cuál es:   ./deploy/detect-dns.sh $DOMAIN"
+fi
+echo
+echo "  3. Seguí la emisión del certificado:"
+echo "         sudo journalctl -u caddy -f"
+echo "     Buscá 'certificate obtained successfully'. Tarda 1-2 minutos."
+echo
+echo "Cuando termine, desde cualquier equipo del switch:"
+echo
+echo "     https://$DOMAIN"
+echo
+echo "  La contraseña de AUTH_PASSWORD es lo único que se necesita: nadie tiene"
+echo "  que instalar Tailscale."
+echo
+echo "  Tailscale sigue funcionando en paralelo para el acceso remoto. Esto NO"
+echo "  publica nada en internet: el nombre resuelve a una IP privada."
+echo "--------------------------------------------------------------------------"

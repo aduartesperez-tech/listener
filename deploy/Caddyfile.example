@@ -1,39 +1,36 @@
-# Frontal HTTPS para la LAN de la institucion.
+# Frontal HTTPS para la LAN de la institucion.  --  PLANTILLA
 #
-# Copiar a /etc/caddy/Caddyfile y ajustar el nombre y el proveedor de DNS.
-# Despues:  sudo systemctl reload caddy
+# setup-lan.sh rellena @DOMAIN@ y @DNS_DIRECTIVE@ y escribe el resultado en
+# /etc/caddy/Caddyfile. Se puede editar despues a mano; el script no sobrescribe
+# un Caddyfile que ya mencione el dominio.
 #
 # Por que Caddy y no exponer uvicorn con TLS directamente: renueva el
 # certificado solo y recarga sin cortar el servicio. Con un cert manual hay que
 # acordarse cada 60 dias, y el dia que caduque nadie puede grabar.
 
 {
-	# Correo para los avisos de expiracion de Let's Encrypt.
-	email admin@institucion.cr
+	# Avisos de expiracion de Let's Encrypt. Cambialo por un correo real.
+	email @EMAIL@
 
-	# Para probar sin gastar cuota de Let's Encrypt (5 fallos/hora por dominio),
-	# descomentar y usar el entorno de pruebas. El navegador va a desconfiar del
-	# certificado: sirve para validar la configuracion, no para produccion.
+	# Para validar la configuracion sin gastar cuota de Let's Encrypt
+	# (5 fallos por hora y por dominio), descomentar el entorno de pruebas. El
+	# navegador desconfiara del certificado: sirve para probar, no para producir.
 	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
-listener.institucion.cr {
+@DOMAIN@ {
 
 	# --- Certificado por DNS-01 --------------------------------------------
 	# DNS-01 es el unico desafio que NO necesita que Let's Encrypt alcance el
-	# servidor: se valida poniendo un registro TXT. Por eso funciona con un
-	# servicio que solo vive en la red interna.
+	# servidor: se valida poniendo un registro TXT en la zona. Por eso funciona
+	# para un servicio que solo vive en la red interna, con el puerto 80 cerrado.
 	#
-	# Requiere el plugin del proveedor de DNS. Con el paquete oficial de Caddy:
-	#     sudo caddy add-package github.com/caddy-dns/cloudflare
-	#     sudo systemctl restart caddy
-	#
-	# Otros proveedores: caddy-dns/route53, caddy-dns/digitalocean,
-	# caddy-dns/googleclouddns, caddy-dns/azure, caddy-dns/namecheap...
-	#
-	# El token va en /etc/caddy/caddy.env (chmod 600), NO aca.
+	# El plugin del proveedor lo instala setup-lan.sh con `caddy add-package`.
+	# El token va en /etc/caddy/caddy.env (chmod 600), nunca aca.
 	tls {
-		dns cloudflare {env.CF_API_TOKEN}
+		@DNS_DIRECTIVE@
+		# Resolvers publicos: si el DNS interno no ve los TXT de la zona
+		# publica, la validacion falla sin explicacion clara.
 		resolvers 1.1.1.1 8.8.8.8
 	}
 
@@ -49,26 +46,24 @@ listener.institucion.cr {
 		header_up -Tailscale-User-Profile-Pic
 
 		# La app lee el ULTIMO valor de X-Forwarded-For, que es el que agrega
-		# Caddy: asi el bloqueo por intentos fallidos no se puede evadir
-		# mandando una cadena falsa.
+		# Caddy: asi el bloqueo por intentos fallidos no se evade mandando una
+		# cadena falsa.
 		header_up X-Forwarded-For {remote_host}
 
-		# El audio va por WebSocket y una reunion dura horas: sin esto, el
-		# proxy corta la sesion a mitad de la reunion.
+		# El audio va por WebSocket y una reunion dura horas: sin esto el proxy
+		# corta la sesion a mitad de la reunion.
 		transport http {
 			read_timeout 6h
 			write_timeout 6h
 		}
 	}
 
-	# --- Limite de tamano --------------------------------------------------
 	# El audio no sube por HTTP (va por WebSocket), asi que los POST son
 	# minimos. Un tope bajo reduce la superficie.
 	request_body {
 		max_size 1MB
 	}
 
-	# --- Endurecimiento ----------------------------------------------------
 	header {
 		# Un ano de HSTS: el navegador se niega a hablar en claro con este host.
 		Strict-Transport-Security "max-age=31536000"
@@ -85,8 +80,8 @@ listener.institucion.cr {
 			roll_size 20MB
 			roll_keep 5
 		}
-		# Las URLs incluyen ids de reunion, no contenido. Aun asi, este log
-		# revela quien accede a que: tratalo como dato interno.
+		# Las URLs traen ids de reunion, no contenido. Aun asi este log revela
+		# quien accede a que: tratalo como dato interno.
 		format console
 	}
 }
@@ -94,10 +89,10 @@ listener.institucion.cr {
 # ---------------------------------------------------------------------------
 # ALTERNATIVA sin plugin de DNS
 # ---------------------------------------------------------------------------
-# Si el puerto 80 del servidor es alcanzable desde internet (aunque sea solo
-# durante la emision), Caddy resuelve el desafio HTTP-01 sin ningun plugin:
-# basta con borrar el bloque `tls { ... }` de arriba. El resto queda igual.
+# Si el puerto 80 del servidor fuera alcanzable desde internet (aunque solo
+# durante la emision y las renovaciones), Caddy resuelve el desafio HTTP-01 sin
+# ningun plugin ni token: basta con borrar el bloque `tls { ... }`.
 #
-# Si no hay dominio propio ni forma de exponer el 80, la salida es una CA
-# interna con `caddy trust`, pero entonces hay que instalar el certificado raiz
-# en cada dispositivo: friccion parecida a instalar Tailscale.
+# Sin dominio propio ni forma de exponer el 80, la salida es una CA interna con
+# `caddy trust`, pero hay que instalar el certificado raiz en cada dispositivo:
+# friccion parecida a instalar Tailscale.
