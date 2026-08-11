@@ -18,10 +18,11 @@ die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "corré esto con sudo"
 
-# Versiones de Python con wheels de ctranslate2 disponibles. El motor de
-# faster-whisper se distribuye compilado; si no hay wheel para la version del
-# sistema, pip intenta compilar CTranslate2 desde fuente y eso no termina bien.
-# Ubuntu 26.04 trae 3.14 por defecto, que hoy suele quedar fuera.
+# Orden de preferencia si hay varias versiones instaladas. ctranslate2 se
+# distribuye como wheel compilado, y las versiones con mas rodaje son las que
+# con mas seguridad tienen wheel publicado. No es un filtro: si no hay ninguna
+# de estas se usa `python3` sin mas, y si la instalacion falla se busca
+# alternativa entonces. Verificado con Python 3.14 en Ubuntu 26.04.
 PREFERRED_PYTHONS=(python3.12 python3.11 python3.13 python3.10)
 
 # --- 1. Paquetes del sistema -------------------------------------------------
@@ -55,13 +56,11 @@ pick_python() {
   echo "python3"
 }
 
-# Ultima version menor de la serie 3.x que consideramos segura para wheels.
-MAX_SAFE_MINOR=13
+py_full() { "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])'; }
 
-py_minor() { "$1" -c 'import sys; print(sys.version_info[1])'; }
-py_full()  { "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])'; }
-
-# Intenta instalar del archivo de Ubuntu una version con wheels disponibles.
+# Intenta instalar del archivo de Ubuntu una version alternativa de Python.
+# Solo se usa como RESPALDO si el pip install ya fallo: no se descarta la
+# version del sistema por su numero. Ubuntu 26.04 trae 3.14 y funciona.
 install_fallback_python() {
   local version
   for version in 3.12 3.13 3.11; do
@@ -75,20 +74,7 @@ install_fallback_python() {
 }
 
 PY="$(pick_python)"
-log "intérprete candidato: $PY (Python $(py_full "$PY"))"
-
-if (( $(py_minor "$PY") > MAX_SAFE_MINOR )); then
-  warn "Python $(py_full "$PY") es más nuevo que lo que ctranslate2 suele publicar"
-  warn "como wheel. Buscando una versión con wheels disponibles…"
-  if ALT="$(install_fallback_python)"; then
-    PY="$ALT"
-    log "usando $PY (Python $(py_full "$PY"))"
-  else
-    warn "no hay otra versión en el archivo de Ubuntu; se intenta con $(py_full "$PY")."
-    warn "Si el pip install falla en ctranslate2, mirá la sección 'Versión de"
-    warn "Python' del README: se resuelve con uv en dos comandos."
-  fi
-fi
+log "intérprete: $PY (Python $(py_full "$PY"))"
 
 # --- 2. Usuario de servicio --------------------------------------------------
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
@@ -101,43 +87,49 @@ fi
 # --- 3. Entorno virtual ------------------------------------------------------
 VENV="$APP_DIR/.venv"
 
-# Si ya hay un venv con otra version de Python, se rehace: mezclar versiones
-# deja el venv medio roto de una forma dificil de diagnosticar.
-if [[ -d "$VENV" ]]; then
-  EXISTING="$("$VENV/bin/python" -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo "?")"
-  WANTED="$(py_minor "$PY")"
-  if [[ "$EXISTING" != "$WANTED" ]]; then
-    warn "el venv existente usa Python 3.$EXISTING y ahora se quiere 3.$WANTED: se recrea"
-    rm -rf "$VENV"
+build_venv() {
+  local python="$1"
+  log "creando entorno virtual en $VENV con $python ($(py_full "$python"))"
+  rm -rf "$VENV"
+  "$python" -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet --upgrade pip wheel
+  log "instalando dependencias de Python (tarda unos minutos)"
+  "$VENV/bin/pip" install -r "$APP_DIR/requirements.txt"
+}
+
+# Se intenta con el intérprete elegido. Solo si falla se busca otro: la causa
+# habitual es que ctranslate2 no publique wheel para esa versión de Python, y
+# entonces pip trata de compilar CTranslate2 desde fuente y no termina bien.
+if [[ -d "$VENV" ]] && "$VENV/bin/python" -c 'import faster_whisper, webrtcvad' 2>/dev/null; then
+  log "el venv existente ya tiene las dependencias; se actualiza sin recrearlo"
+  "$VENV/bin/pip" install --quiet --upgrade pip wheel
+  "$VENV/bin/pip" install -r "$APP_DIR/requirements.txt"
+elif ! build_venv "$PY"; then
+  warn "falló la instalación con $(py_full "$PY")."
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    die "PYTHON_BIN fue explícito, no se busca alternativa. Revisá el error de arriba."
   fi
-fi
+  warn "buscando otra versión de Python en el archivo de Ubuntu…"
+  if ALT="$(install_fallback_python)" && build_venv "$ALT"; then
+    log "resuelto con $ALT"
+  else
+    echo
+    die "$(cat <<'MSG'
+no se pudieron instalar las dependencias con ninguna versión de Python disponible.
 
-log "creando entorno virtual en $VENV con $PY"
-[[ -d "$VENV" ]] || "$PY" -m venv "$VENV"
-
-"$VENV/bin/pip" install --quiet --upgrade pip wheel
-
-log "instalando dependencias de Python (tarda unos minutos)"
-if ! "$VENV/bin/pip" install -r "$APP_DIR/requirements.txt"; then
-  echo
-  die "$(cat <<'MSG'
-falló la instalación de dependencias.
-
-La causa más común es que no exista un wheel de ctranslate2 para esta versión
-de Python. Comprobalo con:
-
-    .venv/bin/pip install ctranslate2
-
-Si el error menciona 'building wheel', 'cmake' o 'no matching distribution',
-instalá un Python con wheels usando uv (no toca el Python del sistema):
+Si el error menciona 'building wheel', 'cmake' o 'no matching distribution', el
+problema es que ctranslate2 no tiene wheel para esta versión. La salida limpia es
+uv, que baja un CPython propio sin tocar el del sistema:
 
     curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
     less /tmp/uv-install.sh          # revisalo antes de ejecutarlo
     sh /tmp/uv-install.sh
     ~/.local/bin/uv python install 3.12
+    cd /opt/listener
     sudo PYTHON_BIN="$(~/.local/bin/uv python find 3.12)" ./deploy/install.sh
 MSG
 )"
+  fi
 fi
 
 # Verificacion real: que los modulos importen, no solo que pip diga que si.

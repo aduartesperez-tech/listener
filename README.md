@@ -59,7 +59,7 @@ final sale mucho mejor que el vivo, y el hardware nunca se ahoga.
 
 ## Requisitos
 
-- Ubuntu Server con Python **3.10–3.13** (ver nota abajo)
+- Ubuntu Server con Python 3.10+ (probado en 26.04 con 3.14.4)
 - CPU con **AVX2** (cualquier Intel desde Haswell / AMD desde Zen)
 - ~2 GB de RAM libres, ~4 GB de disco para los modelos
 - Tailscale instalado y en el tailnet
@@ -100,12 +100,13 @@ journalctl -u listener -f
 compilado**. Si no hay wheel para la versión de Python del sistema, pip intenta
 compilar CTranslate2 desde fuente y eso no termina bien.
 
-**Ubuntu 26.04 trae Python 3.14 por defecto**, que hoy suele quedar fuera de los
-wheels publicados. `install.sh` lo detecta: prefiere `python3.12`/`3.11`/`3.13`
-si están, e intenta instalar una del archivo de Ubuntu si no.
+**Verificado funcionando con Python 3.14.4 en Ubuntu 26.04**, que es lo que trae
+por defecto. `install.sh` intenta con el intérprete del sistema y solo busca una
+alternativa **si la instalación falla de verdad** — no descarta versiones por su
+número.
 
-Si no hay ninguna disponible, la salida más limpia es `uv`, que baja un CPython
-propio sin tocar el del sistema:
+Si ninguna versión del archivo de Ubuntu sirve, la salida limpia es `uv`, que
+baja un CPython propio sin tocar el del sistema:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
