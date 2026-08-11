@@ -1,0 +1,10 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+faster-whisper>=1.1.0
+webrtcvad-wheels>=2.0.14
+numpy>=1.24
+
+# Diarizacion (quien habla) - OPCIONAL y desactivada por defecto.
+# Arrastra PyTorch (~2.5 GB en disco) y es lenta en esta CPU.
+# Instalar solo si ENABLE_DIARIZATION=true:
+#   pip install pyannote.audio==3.3.2

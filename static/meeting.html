@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reunión — LISTENER</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">LISTEN<span>ER</span></div>
+    <div class="spacer"></div>
+    <a href="/">← Todas las reuniones</a>
+  </header>
+
+  <div class="notice err hidden" id="error"></div>
+  <div class="notice info hidden" id="info"></div>
+
+  <section class="card">
+    <h2 id="status-label">Reunión</h2>
+    <h1 id="title" style="margin:0 0 10px;font-size:22px;">…</h1>
+    <div class="statusbar" style="border-top:none;padding-top:0;margin-top:0;">
+      <span>Inicio <b id="m-start">—</b></span>
+      <span>Duración <b id="m-dur">—</b></span>
+      <span>Creada por <b id="m-user">—</b></span>
+      <span>Vivo <b id="m-live-model">—</b></span>
+      <span>Acta <b id="m-final-model">—</b></span>
+    </div>
+    <div class="controls" style="margin-top:16px;">
+      <a class="badge" id="dl-txt" href="#">Descargar acta (.txt)</a>
+      <a class="badge" id="dl-wav" href="#">Descargar audio (.wav)</a>
+      <button class="small ghost" id="reprocess">Regenerar acta final</button>
+      <button class="small ghost" id="delete">Borrar reunión</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="tabs" role="tablist">
+      <button id="tab-final" role="tab" aria-selected="true">Acta final</button>
+      <button id="tab-live" role="tab" aria-selected="false">Transcripción en vivo</button>
+    </div>
+    <div id="body" class="transcript" style="max-height:none;"></div>
+  </section>
+
+  <section class="card">
+    <h2>Audio</h2>
+    <audio id="player" controls preload="none" style="width:100%"></audio>
+  </section>
+
+</div>
+<script src="/static/meeting.js"></script>
+</body>
+</html>

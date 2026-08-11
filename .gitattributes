@@ -1,0 +1,28 @@
+# Normalizacion de fin de linea.
+#
+# CRITICO: los scripts de despliegue y la unidad systemd DEBEN quedar en LF.
+# Con CRLF, Ubuntu falla con "bad interpreter: No such file or directory" y la
+# unidad de systemd no arranca. Se desarrolla en Windows y se despliega en
+# Linux, asi que esto no es opcional.
+
+* text=auto eol=lf
+
+*.sh          text eol=lf
+*.service     text eol=lf
+*.py          text eol=lf
+*.js          text eol=lf
+*.css         text eol=lf
+*.html        text eol=lf
+*.md          text eol=lf
+*.toml        text eol=lf
+*.txt         text eol=lf
+.env.example  text eol=lf
+
+# Binarios: que git no los toque
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.png  binary
+*.jpg  binary
+*.db   binary
+*.bin  binary

@@ -1,0 +1,34 @@
+# Configuracion real (contiene HF_TOKEN). Solo se versiona .env.example
+.env
+
+# Datos: grabaciones y base de datos NUNCA van al repo.
+# Son audio de reuniones institucionales.
+data/
+*.wav
+*.db
+*.db-wal
+*.db-shm
+
+# Modelos descargados
+models/
+*.bin
+*.ct2
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log

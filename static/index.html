@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LISTENER — Transcripción de reuniones</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">LISTEN<span>ER</span></div>
+    <div class="tagline">Transcripción local · el audio no sale de la institución</div>
+    <div class="spacer"></div>
+    <div class="who" id="who">…</div>
+  </header>
+
+  <div class="notice err hidden" id="insecure">
+    <b>El micrófono no está disponible.</b> El navegador solo lo permite sobre
+    HTTPS o en <code>localhost</code>. Entrá por el nombre de Tailscale
+    (<code>https://…​.ts.net</code>), no por la IP.
+  </div>
+
+  <div class="notice warn hidden" id="busy"></div>
+  <div class="notice err hidden" id="error"></div>
+  <div class="notice info hidden" id="info"></div>
+
+  <section class="card">
+    <h2>Nueva reunión</h2>
+
+    <label class="field" for="title">
+      <span>Título</span>
+      <input type="text" id="title" placeholder="Ej. Consejo técnico — 11 de agosto"
+             autocomplete="off" maxlength="160">
+    </label>
+
+    <div class="controls">
+      <button class="primary" id="start">Iniciar reunión</button>
+      <button class="danger" id="stop" disabled>Detener</button>
+      <span class="dot" id="dot" title="estado"></span>
+      <div class="meter" title="nivel de entrada del micrófono"><i id="level"></i></div>
+    </div>
+
+    <div class="statusbar">
+      <span>Estado <b id="s-state">en espera</b></span>
+      <span>Tiempo <b id="s-time">00:00</b></span>
+      <span>Frases <b id="s-segs">0</b></span>
+      <span>Cola <b id="s-queue">0</b></span>
+      <span title="Real Time Factor: segundos de CPU por segundo de audio. Menor que 1 = va al día.">RTF <b id="s-rtf">—</b></span>
+      <span>Modelo <b id="s-model">—</b></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Transcripción en vivo</h2>
+    <div class="transcript" id="transcript">
+      <div class="empty">Al iniciar la reunión, el texto va apareciendo acá frase por frase.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Reuniones</h2>
+    <div class="table-scroll">
+      <table class="meetings">
+        <thead>
+          <tr>
+            <th>Título</th><th>Fecha</th><th>Duración</th>
+            <th>Estado</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="meetings">
+          <tr><td colspan="5" class="muted">Cargando…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="foot">
+    Una reunión a la vez — el servidor dedica los 4 núcleos a la transcripción en vivo.
+    Al terminar, la grabación se reprocesa con un modelo más preciso para el acta final.
+  </footer>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

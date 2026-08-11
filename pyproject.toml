@@ -1,0 +1,15 @@
+[project]
+name = "listener"
+version = "0.1.0"
+description = "Transcripcion de reuniones en tiempo real, 100% local (Whisper + FastAPI)"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+# `python -m pytest` desde la raiz: asegura que `app` sea importable.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

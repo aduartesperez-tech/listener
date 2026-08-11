@@ -1,0 +1,57 @@
+[Unit]
+Description=LISTENER - transcripcion de reuniones en tiempo real (local)
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=PYTHONUNBUFFERED=1
+# CTranslate2 y OpenMP: dejar que faster-whisper controle el paralelismo via
+# cpu_threads. Sin esto, OpenMP abre sus propios hilos y se pelean por 4 nucleos.
+Environment=OMP_NUM_THREADS=4
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+
+ExecStart=@APP_DIR@/.venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --ws-max-size 1048576 \
+    --timeout-graceful-shutdown 200 \
+    --log-level info
+
+# La transcripcion en vivo no debe perder CPU frente a tareas de fondo.
+Nice=-5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=2
+
+Restart=on-failure
+RestartSec=5
+# Un reinicio a media reunion pierde la sesion en curso, pero el WAV y los
+# segmentos ya guardados sobreviven y la reunion se reencola para el acta.
+KillSignal=SIGINT
+TimeoutStopSec=210
+
+# --- Endurecimiento ---------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# Escritura permitida solo donde hace falta: datos y cache de modelos.
+ReadWritePaths=@APP_DIR@/data
+ReadWritePaths=/home/@APP_USER@/.cache
+# Nota: no se filtra la red a nivel de unidad porque el proceso necesita salida
+# HTTPS para descargar los modelos de HuggingFace la primera vez. El control de
+# acceso entrante lo hace Tailscale (la app solo escucha en 127.0.0.1).
+
+[Install]
+WantedBy=multi-user.target
