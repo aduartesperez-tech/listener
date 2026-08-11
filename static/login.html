@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acceso — LISTENER</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap" style="max-width:420px;padding-top:12vh;">
+
+  <header class="top" style="justify-content:center;border:none;margin-bottom:8px;">
+    <div class="brand" style="font-size:18px;">LISTEN<span>ER</span></div>
+  </header>
+  <p class="muted" style="text-align:center;margin:0 0 24px;">
+    Transcripción de reuniones · el audio no sale de la institución
+  </p>
+
+  <div class="notice err hidden" id="err-bad">
+    Contraseña incorrecta.
+  </div>
+  <div class="notice warn hidden" id="err-locked">
+    Demasiados intentos fallidos. Esperá <b id="wait">unos minutos</b> antes de volver a probar.
+  </div>
+
+  <section class="card">
+    <form method="post" action="/login" autocomplete="on">
+      <input type="hidden" name="next" id="next" value="/">
+      <label class="field" for="password">
+        <span>Contraseña de acceso</span>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" required autofocus>
+      </label>
+      <button class="primary" type="submit" style="width:100%;">Entrar</button>
+    </form>
+  </section>
+
+  <p class="muted" style="text-align:center;">
+    Si no la tenés, pedila a quien administra el servidor.
+  </p>
+
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+
+  // El destino viene de la URL, pero el servidor lo revalida: solo acepta
+  // rutas internas, así que no sirve para un open redirect.
+  const next = params.get('next');
+  if (next && next.startsWith('/')) document.getElementById('next').value = next;
+
+  const error = params.get('error');
+  if (error === 'bad') document.getElementById('err-bad').className = 'notice err';
+  if (error === 'locked') {
+    document.getElementById('err-locked').className = 'notice warn';
+    const wait = parseInt(params.get('wait') || '0', 10);
+    if (wait > 0) {
+      document.getElementById('wait').textContent =
+        wait >= 60 ? `${Math.ceil(wait / 60)} minuto(s)` : `${wait} segundos`;
+    }
+  }
+</script>
+</body>
+</html>

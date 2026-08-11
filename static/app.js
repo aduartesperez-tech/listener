@@ -97,6 +97,8 @@ async function refreshStatus() {
     const data = await res.json();
     el.who.textContent = data.user;
     el.sModel.textContent = data.asr.live_model;
+    const logout = $('logout');
+    if (logout) logout.style.display = data.auth_enabled ? '' : 'none';
 
     if (data.busy && !state.running) {
       const a = data.active || {};

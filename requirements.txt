@@ -4,6 +4,10 @@ faster-whisper>=1.1.0
 webrtcvad-wheels>=2.0.14
 numpy>=1.24
 
+# Requerido por FastAPI para leer el formulario de login (Form()).
+# Sin esto, /login falla en tiempo de peticion.
+python-multipart>=0.0.9
+
 # Diarizacion (quien habla) - OPCIONAL y desactivada por defecto.
 # Arrastra PyTorch (~2.5 GB en disco) y es lenta en esta CPU.
 # Instalar solo si ENABLE_DIARIZATION=true:

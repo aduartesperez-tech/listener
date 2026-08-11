@@ -2,3 +2,6 @@
 
 pytest>=8.0
 ruff>=0.6
+
+# TestClient de Starlette (tests de integracion del login)
+httpx>=0.27

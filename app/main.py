@@ -13,12 +13,21 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from urllib.parse import quote, urlparse
+
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .asr import AsrEngine, format_transcript
+from .auth import COOKIE_NAME, Auth, client_ip, load_secret
 from .config import settings
 from .db import Database
 from .postprocess import PostProcessor
@@ -34,6 +43,14 @@ db = Database(settings.db_path)
 asr = AsrEngine(settings)
 sessions = SessionManager(settings, asr, db)
 post = PostProcessor(settings, asr, db, sessions)
+auth = Auth(
+    settings.auth_password,
+    load_secret(settings.session_secret, settings.data_dir),
+    settings.session_hours,
+)
+
+# Rutas alcanzables sin sesion. Todo lo demas queda detras del login.
+PUBLIC_PATHS = frozenset({"/login", "/logout", "/healthz"})
 
 STATUS_LABELS = {
     "live": "Grabando",
@@ -48,12 +65,19 @@ STATUS_LABELS = {
 async def lifespan(app: FastAPI):
     db.init()
     log.info(
-        "LISTENER %s | vivo=%s | acta=%s | diarizacion=%s",
+        "LISTENER %s | vivo=%s | acta=%s | diarizacion=%s | auth=%s",
         __version__,
         settings.live_model,
         settings.final_model if settings.enable_final else "off",
         settings.enable_diarization,
+        "contrasena" if auth.enabled else "DESACTIVADA",
     )
+    if not auth.enabled:
+        log.warning(
+            "AUTH_PASSWORD esta vacio: cualquiera que alcance el puerto entra y"
+            " puede leer todas las actas. Aceptable solo si el unico camino de"
+            " entrada es Tailscale."
+        )
     # Precarga en segundo plano: el server responde ya, y la primera frase de
     # la reunion no paga el arranque del modelo.
     warm = asyncio.create_task(asyncio.to_thread(_safe_warmup))
@@ -81,13 +105,109 @@ app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
 
 
 def _user(request_or_ws) -> str:
-    """Identidad aportada por Tailscale Serve, si esta delante."""
+    """Nombre para ATRIBUIR una reunion. Nunca para autorizar.
+
+    Tailscale Serve inyecta estas cabeceras, pero un cliente de la LAN podria
+    falsificarlas y ambos frontales proxean desde 127.0.0.1, asi que la app no
+    puede distinguir el origen. El acceso lo decide la cookie de sesion; esto
+    es solo una etiqueta. Caddy las borra de las peticiones entrantes.
+    """
     headers = request_or_ws.headers
-    return (
-        headers.get("tailscale-user-login")
-        or headers.get("tailscale-user-name")
-        or "anonimo"
+    name = headers.get("tailscale-user-login") or headers.get("tailscale-user-name")
+    if name:
+        return name[:120]
+    return "anonimo"
+
+
+def _safe_next(raw: str | None) -> str:
+    """Evita open redirect: solo se acepta una ruta interna."""
+    if not raw:
+        return "/"
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc or not raw.startswith("/"):
+        return "/"
+    return raw
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Puerta de entrada de todo el HTTP. El WebSocket se valida por separado
+    porque el middleware HTTP de Starlette no lo intercepta."""
+    path = request.url.path
+    if (
+        not auth.enabled
+        or path in PUBLIC_PATHS
+        or path.startswith("/static/")
+        or path == "/favicon.ico"
+    ):
+        return await call_next(request)
+
+    if auth.authenticated(request):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"error": "no autenticado"}, status_code=401)
+    return RedirectResponse(f"/login?next={quote(path)}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page(request: Request) -> Response:
+    if not auth.enabled or auth.authenticated(request):
+        return RedirectResponse(_safe_next(request.query_params.get("next")), status_code=303)
+    return FileResponse(settings.static_dir / "login.html")
+
+
+@app.post("/login", include_in_schema=False)
+async def login_submit(
+    request: Request,
+    password: str = Form(""),
+    next: str = Form("/"),
+) -> Response:
+    target = _safe_next(next)
+    if not auth.enabled:
+        return RedirectResponse(target, status_code=303)
+
+    ip = client_ip(request)
+    locked = auth.limiter.locked_for(ip)
+    if locked > 0:
+        log.warning("intento de login desde %s bloqueado (%.0f s restantes)", ip, locked)
+        return RedirectResponse(
+            f"/login?error=locked&wait={int(locked)}&next={quote(target)}", status_code=303
+        )
+
+    if not auth.check_password(password):
+        auth.limiter.record_failure(ip)
+        log.warning("contrasena incorrecta desde %s", ip)
+        return RedirectResponse(f"/login?error=bad&next={quote(target)}", status_code=303)
+
+    auth.limiter.record_success(ip)
+    response = RedirectResponse(target, status_code=303)
+    response.set_cookie(
+        COOKIE_NAME,
+        auth.issue_token(),
+        max_age=auth.session_seconds,
+        httponly=True,
+        samesite="lax",
+        # secure=True romperia el acceso por http://localhost, que es como se
+        # prueba con un tunel SSH. El transporte real siempre es HTTPS por
+        # Caddy o Tailscale Serve.
+        secure=False,
+        path="/",
     )
+    log.info("login correcto desde %s", ip)
+    return response
+
+
+@app.get("/logout", include_in_schema=False)
+async def logout() -> Response:
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +240,7 @@ async def api_status(request: Request) -> dict:
     return {
         "version": __version__,
         "user": _user(request),
+        "auth_enabled": auth.enabled,
         "busy": sessions.busy,
         "active": sessions.current(),
         "language": settings.language,
@@ -267,6 +388,14 @@ async def api_delete(meeting_id: int) -> dict:
 
 @app.websocket("/ws/live")
 async def ws_live(ws: WebSocket) -> None:
+    # El middleware HTTP no ve los WebSocket: hay que validar aca a mano, antes
+    # de aceptar. Sin esto, la ruta de grabacion quedaria abierta aunque el
+    # resto de la app pida contrasena.
+    if not auth.authenticated(ws):
+        log.warning("WebSocket rechazado sin sesion desde %s", client_ip(ws))
+        await ws.close(code=1008)  # 1008 = policy violation
+        return
+
     await ws.accept()
     user = _user(ws)
 

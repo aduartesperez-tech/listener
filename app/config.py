@@ -86,6 +86,10 @@ class Settings:
 
     max_meeting_hours: float
 
+    auth_password: str
+    session_secret: str
+    session_hours: float
+
     data_dir: Path
     model_cache_dir: str
 
@@ -134,6 +138,9 @@ def load_settings() -> Settings:
         max_utterance_sec=_float("MAX_UTTERANCE_SEC", 20.0),
         min_utterance_sec=_float("MIN_UTTERANCE_SEC", 0.35),
         max_meeting_hours=_float("MAX_MEETING_HOURS", 4.0),
+        auth_password=_str("AUTH_PASSWORD", ""),
+        session_secret=_str("SESSION_SECRET", ""),
+        session_hours=_float("SESSION_HOURS", 12.0),
         data_dir=data_dir,
         model_cache_dir=_str("MODEL_CACHE_DIR", ""),
     )

@@ -182,12 +182,71 @@ acceso al grupo que corresponda:
 
 Y etiquetá el servidor: `sudo tailscale up --advertise-tags=tag:listener`
 
-### Si todos están en la red interna
+---
 
-Cada persona necesita Tailscale en su dispositivo. Si son pocas, trivial. Si son
-muchas y no todas son técnicas, hay una variante: sacar el certificado con
-`tailscale cert` y apuntar ese mismo nombre a la IP de la LAN en el DNS interno.
-El TLS valida igual, porque se valida por **nombre**, no por IP.
+## Abrirlo a toda la institución (LAN)
+
+Tailscale exige que cada persona instale el cliente. Para una institución
+completa eso no escala, y **no hace falta**: el servidor ya está en la red
+interna (`eno1`), así que cualquier equipo del switch lo alcanza directamente.
+No hay que puentear nada ni montar un subnet router — eso resuelve el problema
+inverso (que dispositivos del tailnet lleguen a la LAN).
+
+Lo único que faltaba son dos cosas:
+
+1. Un **certificado** que los dispositivos de la institución confíen.
+2. Algo que **escuche en la interfaz de la LAN**. La app sigue atada a
+   `127.0.0.1`; Caddy es el frontal.
+
+```bash
+# 1. Contraseña obligatoria (el script se niega a seguir sin ella)
+openssl rand -base64 18
+sudo nano /opt/listener/.env          # pegala en AUTH_PASSWORD=
+sudo systemctl restart listener
+
+# 2. Caddy como frontal HTTPS
+cd /opt/listener
+sudo ./deploy/setup-lan.sh listener.institucion.cr
+```
+
+Después queda lo que depende del proveedor de DNS:
+
+- **Registro A**: `listener.institucion.cr → 10.10.2.16`. Un registro público
+  apuntando a una IP privada es correcto y habitual: solo resuelve, no expone.
+- **Token del proveedor** en `/etc/caddy/caddy.env` (chmod 600).
+- **Plugin del proveedor**, porque el Caddy de serie no lo trae:
+  `sudo caddy add-package github.com/caddy-dns/cloudflare`
+
+Se usa el desafío **DNS-01** porque es el único que no necesita que Let's
+Encrypt alcance el servidor: se valida poniendo un registro TXT. Así funciona
+para un servicio que solo vive en la red interna. Si el puerto 80 del servidor
+sí es alcanzable desde internet, se puede borrar el bloque `tls { … }` del
+Caddyfile y usar HTTP-01 sin ningún plugin.
+
+Tailscale sigue funcionando en paralelo para el acceso desde fuera.
+
+### Autenticación
+
+Mientras el único camino era Tailscale, la red era la autenticación. Al abrirlo
+a la LAN eso desaparece, así que hay **contraseña compartida** (`AUTH_PASSWORD`)
+con sesión por cookie firmada con HMAC, y bloqueo por IP tras 8 intentos
+fallidos.
+
+Un detalle que importa: la cabecera `Tailscale-User-Login` **no autoriza**. Un
+cliente de la LAN podría enviarla a mano, y ambos frontales proxean desde
+`127.0.0.1`, así que la app no puede distinguir el origen por IP. Esa cabecera
+solo sirve para **atribuir** quién creó una reunión. El Caddyfile además la
+borra de las peticiones entrantes, para que nadie aparezca como otra persona en
+las actas.
+
+Si `AUTH_PASSWORD` queda vacío, la app arranca abierta y lo avisa en el log —
+sigue siendo válido para un despliegue de solo-Tailscale, nunca para la LAN.
+
+### Solo Tailscale, sin LAN
+
+Si preferís no abrirlo a la red interna, la variante intermedia es sacar el
+certificado con `tailscale cert` y apuntar ese mismo nombre a la IP de la LAN en
+el DNS interno. El TLS valida igual, porque se valida por **nombre**, no por IP.
 
 ---
 
@@ -263,7 +322,12 @@ Si falla o el token no está, el acta sale igual, solo sin etiquetas.
 ## Límites conocidos
 
 - **Una reunión a la vez.** 4 núcleos no dan para dos. El segundo intento recibe
-  un aviso claro de "ocupado" en lugar de degradar las dos sesiones.
+  un aviso claro de "ocupado" en lugar de degradar las dos sesiones. Esto es lo
+  que más se va a notar al abrirlo a toda la institución: la app avisa quién
+  está grabando y desde cuándo, pero el segundo no puede empezar.
+- **Una sola contraseña para todos.** No hay identidad individual en la LAN: no
+  se puede saber quién grabó qué, ni revocar el acceso de una persona sin
+  cambiarla para todo el mundo.
 - **El vivo tiene prioridad absoluta.** Si arranca una reunión mientras se
   genera un acta final, ese trabajo se aborta a mitad y se reencola.
 - **Solo se captura el micrófono.** Si la reunión es por Zoom o Meet, se graba
@@ -280,7 +344,8 @@ Si falla o el token no está, el acta sale igual, solo sin etiquetas.
 
 ```
 app/
-  main.py         FastAPI: rutas HTTP y el WebSocket de la sesión en vivo
+  main.py         FastAPI: rutas HTTP, login y el WebSocket de la sesión en vivo
+  auth.py         Contraseña compartida, cookie firmada, bloqueo por intentos
   session.py      Sesión en vivo + candado de sesión única
   vad.py          Segmentador de voz en streaming (WebRTC VAD)
   asr.py          Los dos motores Whisper + filtro de alucinaciones
@@ -295,8 +360,10 @@ static/
   app.js          Captura, WebSocket, UI del vivo
   recorder.worklet.js   Micrófono → PCM Int16 16 kHz mono
 deploy/
-  install.sh      Instalación en Ubuntu
-  update.sh       Despliegue de cambios
+  install.sh       Instalación en Ubuntu
+  setup-lan.sh     Publicación en la LAN con Caddy + HTTPS válido
+  Caddyfile.example Frontal TLS, con las cabeceras spoofables filtradas
+  update.sh        Despliegue de cambios
   listener.service Unidad systemd endurecida
 bench.py          Benchmark de modelos en la máquina real
 ```
@@ -333,10 +400,18 @@ el micrófono funciona sin certificado.
 python -m pytest
 ```
 
-Cubren la máquina de estados del VAD (preroll, cierre por silencio, corte
-forzado, chunks no alineados al frame, correspondencia entre PCM y timestamps) y
-el filtro de alucinaciones. No requieren modelos ni GPU: el VAD se sustituye por
-un stub determinista, porque lo que se prueba es el segmentador, no el detector.
+Cubren tres cosas:
+
+- **VAD**: preroll, cierre por silencio, corte forzado, chunks no alineados al
+  frame, y correspondencia exacta entre PCM y timestamps. El VAD se sustituye
+  por un stub determinista, porque lo que se prueba es el segmentador.
+- **Filtro de alucinaciones** y formato del acta.
+- **Autenticación**, incluido lo crítico: que una cabecera `Tailscale-User-Login`
+  falsificada no dé acceso, que el WebSocket se rechace sin sesión, y que no
+  haya open redirect en el `next` del login.
+
+No requieren modelos ni GPU: el TestClient corre sin el lifespan, así que no se
+dispara la precarga.
 
 ---
 

@@ -1,0 +1,103 @@
+# Frontal HTTPS para la LAN de la institucion.
+#
+# Copiar a /etc/caddy/Caddyfile y ajustar el nombre y el proveedor de DNS.
+# Despues:  sudo systemctl reload caddy
+#
+# Por que Caddy y no exponer uvicorn con TLS directamente: renueva el
+# certificado solo y recarga sin cortar el servicio. Con un cert manual hay que
+# acordarse cada 60 dias, y el dia que caduque nadie puede grabar.
+
+{
+	# Correo para los avisos de expiracion de Let's Encrypt.
+	email admin@institucion.cr
+
+	# Para probar sin gastar cuota de Let's Encrypt (5 fallos/hora por dominio),
+	# descomentar y usar el entorno de pruebas. El navegador va a desconfiar del
+	# certificado: sirve para validar la configuracion, no para produccion.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+listener.institucion.cr {
+
+	# --- Certificado por DNS-01 --------------------------------------------
+	# DNS-01 es el unico desafio que NO necesita que Let's Encrypt alcance el
+	# servidor: se valida poniendo un registro TXT. Por eso funciona con un
+	# servicio que solo vive en la red interna.
+	#
+	# Requiere el plugin del proveedor de DNS. Con el paquete oficial de Caddy:
+	#     sudo caddy add-package github.com/caddy-dns/cloudflare
+	#     sudo systemctl restart caddy
+	#
+	# Otros proveedores: caddy-dns/route53, caddy-dns/digitalocean,
+	# caddy-dns/googleclouddns, caddy-dns/azure, caddy-dns/namecheap...
+	#
+	# El token va en /etc/caddy/caddy.env (chmod 600), NO aca.
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		resolvers 1.1.1.1 8.8.8.8
+	}
+
+	# --- Proxy a la app ----------------------------------------------------
+	reverse_proxy 127.0.0.1:8000 {
+
+		# CRITICO: borrar las cabeceras de identidad que solo Tailscale Serve
+		# tiene derecho a poner. Sin esto, un cliente de la LAN podria enviar
+		# `Tailscale-User-Login: director@institucion.cr` y aparecer como esa
+		# persona en las actas.
+		header_up -Tailscale-User-Login
+		header_up -Tailscale-User-Name
+		header_up -Tailscale-User-Profile-Pic
+
+		# La app lee el ULTIMO valor de X-Forwarded-For, que es el que agrega
+		# Caddy: asi el bloqueo por intentos fallidos no se puede evadir
+		# mandando una cadena falsa.
+		header_up X-Forwarded-For {remote_host}
+
+		# El audio va por WebSocket y una reunion dura horas: sin esto, el
+		# proxy corta la sesion a mitad de la reunion.
+		transport http {
+			read_timeout 6h
+			write_timeout 6h
+		}
+	}
+
+	# --- Limite de tamano --------------------------------------------------
+	# El audio no sube por HTTP (va por WebSocket), asi que los POST son
+	# minimos. Un tope bajo reduce la superficie.
+	request_body {
+		max_size 1MB
+	}
+
+	# --- Endurecimiento ----------------------------------------------------
+	header {
+		# Un ano de HSTS: el navegador se niega a hablar en claro con este host.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		# La pagina es autocontenida: no carga nada de terceros.
+		Content-Security-Policy "default-src 'self'; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/listener.log {
+			roll_size 20MB
+			roll_keep 5
+		}
+		# Las URLs incluyen ids de reunion, no contenido. Aun asi, este log
+		# revela quien accede a que: tratalo como dato interno.
+		format console
+	}
+}
+
+# ---------------------------------------------------------------------------
+# ALTERNATIVA sin plugin de DNS
+# ---------------------------------------------------------------------------
+# Si el puerto 80 del servidor es alcanzable desde internet (aunque sea solo
+# durante la emision), Caddy resuelve el desafio HTTP-01 sin ningun plugin:
+# basta con borrar el bloque `tls { ... }` de arriba. El resto queda igual.
+#
+# Si no hay dominio propio ni forma de exponer el 80, la salida es una CA
+# interna con `caddy trust`, pero entonces hay que instalar el certificado raiz
+# en cada dispositivo: friccion parecida a instalar Tailscale.
